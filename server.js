@@ -140,4 +140,4 @@ app.get('/api/tutor', async (req, res) => {
 app.listen(port, () => {
   console.log(`Backend server is listening on port ${port}`);
   initializeDatabase();
-});
+}); 
