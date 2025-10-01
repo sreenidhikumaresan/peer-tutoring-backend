@@ -139,5 +139,5 @@ app.get('/api/tutor', async (req, res) => {
 // Start the server
 app.listen(port, () => {
   console.log(`Backend server is listening on port ${port}`);
-  initializeDatabase();
+  //initializeDatabase();
 }); 
