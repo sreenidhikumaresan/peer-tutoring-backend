@@ -5,8 +5,8 @@ const sql = require('mssql');
 const app = express();
 const port = process.env.PORT || 8080;
 
-// IMPORTANT: Your full connection string
-const dbConnectionString = 'Server=tcp:pse10-sql-server-dvs.database.windows.net,1433;Initial Catalog=pse10-db;Persist Security Info=False;User ID=sqladmin;Password=Project@123;MultipleActiveResultSets=False;Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;';
+// IMPORTANT: Your full connection string with the NEW password
+const dbConnectionString = 'Server=tcp:pse10-sql-server-dvs.database.windows.net,1433;Initial Catalog=pse10-db;Persist Security Info=False;User ID=sqladmin;Password=Dharshan@12345;MultipleActiveResultSets=False;Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;';
 
 // Middleware
 app.use(cors());
@@ -21,7 +21,6 @@ async function connectToDatabase() {
       await pool.connect();
       console.log('Database connection pool created.');
       
-      // Listen for errors on the connection pool
       pool.on('error', err => {
         console.error('SQL Connection Pool Error:', err);
       });
@@ -29,18 +28,16 @@ async function connectToDatabase() {
     return pool;
   } catch (err) {
     console.error('Database connection failed:', err);
-    pool = null; // Reset pool on connection failure
-    throw err; // Re-throw the error to be caught by the caller
+    pool = null; 
+    throw err; 
   }
 }
-
 
 // Function to initialize tables
 async function initializeTables() {
   try {
     const db = await connectToDatabase();
     const request = db.request();
-    // Create Users, TutorOffers, and LearnRequests tables in a single query
     await request.query(`
       IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='Users' and xtype='U') CREATE TABLE Users (id INT PRIMARY KEY IDENTITY(1,1), name NVARCHAR(255) NOT NULL, username NVARCHAR(50) UNIQUE NOT NULL, password NVARCHAR(255) NOT NULL);
       IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='TutorOffers' and xtype='U') CREATE TABLE TutorOffers (id INT PRIMARY KEY IDENTITY(1,1), name NVARCHAR(255) NOT NULL, number NVARCHAR(50), schedule NVARCHAR(255));
@@ -49,7 +46,6 @@ async function initializeTables() {
     console.log('Tables are initialized and ready.');
   } catch (err) {
     console.error('Error initializing tables:', err);
-    // Exit if we can't create tables, as the app won't work
     process.exit(1); 
   }
 }
