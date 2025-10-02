@@ -5,18 +5,18 @@ const sql = require('mssql');
 const app = express();
 const port = process.env.PORT || 8080;
 
-// IMPORTANT: Your full connection string with the NEW password
-const dbConnectionString = 'Server=tcp:pse10-sql-server-dvs.database.windows.net,1433;Initial Catalog=pse10-db;Persist Security Info=False;User ID=sqladmin;Password=Dharshan@12345;MultipleActiveResultSets=False;Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;';
+// IMPORTANT: Your full connection string with the NEW server and password
+const dbConnectionString = 'Server=tcp:pse10-sql-server-new.database.windows.net,1433;Initial Catalog=pse10-db;Persist Security Info=False;User ID=sqladmin;Password=Project@1;MultipleActiveResultSets=False;Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;';
 
 // Middleware
 app.use(cors());
 app.use(express.json());
 
-// Create a global connection pool for better performance and error handling
+// Create a global connection pool
 let pool;
 async function connectToDatabase() {
   try {
-    if (!pool) {
+    if (!pool || !pool.connected) {
       pool = new sql.ConnectionPool(dbConnectionString);
       await pool.connect();
       console.log('Database connection pool created.');
