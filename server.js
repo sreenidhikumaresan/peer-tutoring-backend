@@ -12,20 +12,35 @@ const dbConnectionString = 'Server=tcp:pse10-sql-server-dvs.database.windows.net
 app.use(cors());
 app.use(express.json());
 
-// Create a global connection pool
-const pool = new sql.ConnectionPool(dbConnectionString);
-const poolConnect = pool.connect();
+// Create a global connection pool for better performance and error handling
+let pool;
+async function connectToDatabase() {
+  try {
+    if (!pool) {
+      pool = new sql.ConnectionPool(dbConnectionString);
+      await pool.connect();
+      console.log('Database connection pool created.');
+      
+      // Listen for errors on the connection pool
+      pool.on('error', err => {
+        console.error('SQL Connection Pool Error:', err);
+      });
+    }
+    return pool;
+  } catch (err) {
+    console.error('Database connection failed:', err);
+    pool = null; // Reset pool on connection failure
+    throw err; // Re-throw the error to be caught by the caller
+  }
+}
 
-pool.on('error', err => {
-  console.error('SQL Connection Pool Error:', err);
-});
 
 // Function to initialize tables
 async function initializeTables() {
-  await poolConnect; // Ensures the pool is connected
   try {
-    const request = pool.request();
-    // Create Users, TutorOffers, and LearnRequests tables
+    const db = await connectToDatabase();
+    const request = db.request();
+    // Create Users, TutorOffers, and LearnRequests tables in a single query
     await request.query(`
       IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='Users' and xtype='U') CREATE TABLE Users (id INT PRIMARY KEY IDENTITY(1,1), name NVARCHAR(255) NOT NULL, username NVARCHAR(50) UNIQUE NOT NULL, password NVARCHAR(255) NOT NULL);
       IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='TutorOffers' and xtype='U') CREATE TABLE TutorOffers (id INT PRIMARY KEY IDENTITY(1,1), name NVARCHAR(255) NOT NULL, number NVARCHAR(50), schedule NVARCHAR(255));
@@ -44,15 +59,101 @@ app.get('/api/test', (req, res) => {
   res.json({ message: 'Hello from the backend API!' });
 });
 
-// --- SIGNUP/LOGIN ROUTES ---
-// (Your existing signup/login code would go here)
-// ...
+// --- SIGNUP ROUTE ---
+app.post('/api/signup', async (req, res) => {
+  try {
+    const { name, username, password } = req.body;
+    if (!name || !username || !password) {
+      return res.status(400).json({ message: 'All fields are required.' });
+    }
+    const db = await connectToDatabase();
+    const request = db.request();
+    await request.query`INSERT INTO Users (name, username, password) VALUES (${name}, ${username}, ${password})`;
+    res.status(201).json({ message: 'User created successfully!' });
+  } catch (err) {
+    if (err.number === 2627) {
+        return res.status(409).json({ message: 'Username already exists.' });
+    }
+    console.error('Signup Error:', err);
+    res.status(500).json({ message: 'Error creating user.' });
+  }
+});
 
-// --- OTHER ROUTES ---
-// (Your existing learn/tutor routes would go here)
-// ...
+// --- LOGIN ROUTE ---
+app.post('/api/login', async (req, res) => {
+  try {
+    const { username, password } = req.body;
+    if (!username || !password) {
+        return res.status(400).json({ message: 'Username and password are required.' });
+    }
+    const db = await connectToDatabase();
+    const request = db.request();
+    const result = await request.query`SELECT * FROM Users WHERE username = ${username} AND password = ${password}`;
 
-// Start the server and initialize the database
+    if (result.recordset.length > 0) {
+      res.json({ message: 'Login successful!', user: result.recordset[0] });
+    } else {
+      res.status(401).json({ message: 'Invalid username or password.' });
+    }
+  } catch (err) {
+    console.error('Login Error:', err);
+    res.status(500).json({ message: 'Error during login.' });
+  }
+});
+
+// --- LEARN REQUESTS ROUTES ---
+app.post('/api/learn', async (req, res) => {
+  try {
+    const { topic, fileName } = req.body;
+    const db = await connectToDatabase();
+    const request = db.request();
+    await request.query`INSERT INTO LearnRequests (topic, fileName) VALUES (${topic}, ${fileName})`;
+    res.status(201).json({ message: 'Learn request added successfully!' });
+  } catch (err) { 
+    console.error('Error adding learn request:', err);
+    res.status(500).json({ message: 'Error adding learn request.' });
+  }
+});
+
+app.get('/api/learn', async (req, res) => {
+  try {
+    const db = await connectToDatabase();
+    const request = db.request();
+    const result = await request.query`SELECT * FROM LearnRequests`;
+    res.json(result.recordset);
+  } catch (err) { 
+    console.error('Error fetching learn requests:', err);
+    res.status(500).json({ message: 'Error fetching learn requests.' });
+  }
+});
+
+// --- TUTOR OFFERS ROUTES ---
+app.post('/api/tutor', async (req, res) => {
+  try {
+    const { name, number, schedule } = req.body;
+    const db = await connectToDatabase();
+    const request = db.request();
+    await request.query`INSERT INTO TutorOffers (name, number, schedule) VALUES (${name}, ${number}, ${schedule})`;
+    res.status(201).json({ message: 'Tutor offer added successfully!' });
+  } catch (err) { 
+    console.error('Error adding tutor offer:', err);
+    res.status(500).json({ message: 'Error adding tutor offer.' });
+  }
+});
+
+app.get('/api/tutor', async (req, res) => {
+  try {
+    const db = await connectToDatabase();
+    const request = db.request();
+    const result = await request.query`SELECT * FROM TutorOffers`;
+    res.json(result.recordset);
+  } catch (err) { 
+    console.error('Error fetching tutor offers:', err);
+    res.status(500).json({ message: 'Error fetching tutor offers.' });
+  }
+});
+
+// Start the server
 app.listen(port, async () => {
   console.log(`Backend server is listening on port ${port}`);
   await initializeTables();
