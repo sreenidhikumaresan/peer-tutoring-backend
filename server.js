@@ -152,5 +152,5 @@ app.get('/api/tutor', async (req, res) => {
 // Start the server
 app.listen(port, async () => {
   console.log(`Backend server is listening on port ${port}`);
-  await initializeTables();
+  //await initializeTables();
 });
