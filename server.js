@@ -159,4 +159,4 @@ app.get('/api/tutor', async (req, res) => { /* ... existing code ... */ });
 app.listen(port, async () => {
   console.log(`Server is starting and listening on port ${port}`);
   await initializeDatabase();
-});
+}); 
