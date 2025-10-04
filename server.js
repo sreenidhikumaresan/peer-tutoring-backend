@@ -2,40 +2,22 @@ const express = require('express');
 const cors = require('cors');
 const sql = require('mssql');
 const crypto = require('crypto');
+const { EmailClient } = require("@azure/communication-email"); // This line was missing
 
 const app = express();
 const port = process.env.PORT || 8080;
 
-// IMPORTANT: Your full connection string
 const dbConnectionString = 'Server=tcp:pse10-sql-server-new.database.windows.net,1433;Initial Catalog=pse10-db;Persist Security Info=False;User ID=sqladmin;Password=Project@1;MultipleActiveResultSets=False;Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;';
 
 // Middleware
 app.use(cors());
 app.use(express.json());
 
-// Create a global connection pool
-let pool;
-async function connectToDatabase() {
-  try {
-    if (!pool || !pool.connected) {
-      pool = new sql.ConnectionPool(dbConnectionString);
-      await pool.connect();
-      console.log('Database connection pool created.');
-      pool.on('error', err => console.error('SQL Connection Pool Error:', err));
-    }
-    return pool;
-  } catch (err) {
-    console.error('Database connection failed:', err);
-    pool = null; 
-    throw err; 
-  }
-}
-
 // Function to initialize tables
 async function initializeDatabase() {
   try {
-    const db = await connectToDatabase();
-    const request = db.request();
+    const pool = await sql.connect(dbConnectionString);
+    const request = pool.request();
     // Ensure all tables and columns exist
     await request.query(`
       IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='Users' and xtype='U') CREATE TABLE Users (id INT PRIMARY KEY IDENTITY(1,1), name NVARCHAR(255) NOT NULL, username NVARCHAR(50) UNIQUE NOT NULL, email NVARCHAR(255) UNIQUE, password NVARCHAR(255) NOT NULL, resetToken NVARCHAR(255), resetTokenExpiry DATETIME);
@@ -48,7 +30,7 @@ async function initializeDatabase() {
     console.log('Database schema is up to date.');
   } catch (err) {
     console.error('FATAL: Database initialization failed:', err);
-    process.exit(1); 
+    process.exit(1);
   }
 }
 
@@ -60,8 +42,8 @@ app.post('/api/signup', async (req, res) => {
   try {
     const { name, username, email, password } = req.body;
     if (!name || !username || !email || !password) return res.status(400).json({ message: 'All fields are required.' });
-    const db = await connectToDatabase();
-    await db.request().query`INSERT INTO Users (name, username, email, password) VALUES (${name}, ${username}, ${email}, ${password})`;
+    const pool = await sql.connect(dbConnectionString);
+    await pool.request().query`INSERT INTO Users (name, username, email, password) VALUES (${name}, ${username}, ${email}, ${password})`;
     res.status(201).json({ message: 'User created successfully!' });
   } catch (err) {
     if (err.number === 2627) return res.status(409).json({ message: 'Username or email already exists.' });
@@ -75,8 +57,8 @@ app.post('/api/login', async (req, res) => {
   try {
     const { username, password } = req.body;
     if (!username || !password) return res.status(400).json({ message: 'Username and password are required.' });
-    const db = await connectToDatabase();
-    const result = await db.request().query`SELECT * FROM Users WHERE username = ${username} AND password = ${password}`;
+    const pool = await sql.connect(dbConnectionString);
+    const result = await pool.request().query`SELECT * FROM Users WHERE username = ${username} AND password = ${password}`;
     if (result.recordset.length > 0) {
       res.json({ message: 'Login successful!', user: result.recordset[0] });
     } else {
@@ -88,7 +70,7 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
-// --- FORGOT PASSWORD ROUTE (UPDATED) ---
+// --- FORGOT PASSWORD ROUTE ---
 app.post('/api/forgot-password', async (req, res) => {
   try {
     const { email } = req.body;
@@ -105,7 +87,6 @@ app.post('/api/forgot-password', async (req, res) => {
       const frontendUrl = "https://pse10-frontend-site-ffgrdtdvfveec0du.centralindia-01.azurewebsites.net";
       const resetLink = `${frontendUrl}/reset-password.html?token=${token}`;
 
-      // --- EMAIL SENDING LOGIC ---
       const connectionString = process.env.COMMUNICATION_SERVICES_CONNECTION_STRING;
       const senderAddress = process.env.SENDER_EMAIL_ADDRESS;
       const emailClient = new EmailClient(connectionString);
@@ -114,7 +95,7 @@ app.post('/api/forgot-password', async (req, res) => {
         senderAddress: senderAddress,
         content: {
           subject: "Password Reset for Peer Tutoring",
-          plainText: `You requested a password reset. Please click the following link to reset your password:\n\n${resetLink}\n\nIf you did not request this, please ignore this email.`,
+          plainText: `You requested a password reset. Click the following link:\n\n${resetLink}`,
         },
         recipients: { to: [{ address: user.email }] },
       };
@@ -122,7 +103,6 @@ app.post('/api/forgot-password', async (req, res) => {
       const poller = await emailClient.beginSend(message);
       await poller.pollUntilDone();
       console.log(`Password reset email sent to ${user.email}`);
-      // --- END EMAIL LOGIC ---
     }
     
     res.json({ message: 'If an account with that email exists, a password reset link has been sent.' });
@@ -136,13 +116,13 @@ app.post('/api/forgot-password', async (req, res) => {
 app.post('/api/reset-password', async (req, res) => {
   try {
     const { token, password } = req.body;
-    const db = await connectToDatabase();
-    const userResult = await db.request().query`SELECT * FROM Users WHERE resetToken = ${token} AND resetTokenExpiry > GETDATE()`;
+    const pool = await sql.connect(dbConnectionString);
+    const userResult = await pool.request().query`SELECT * FROM Users WHERE resetToken = ${token} AND resetTokenExpiry > GETDATE()`;
     if (userResult.recordset.length === 0) {
       return res.status(400).json({ message: 'Password reset token is invalid or has expired.' });
     }
     const user = userResult.recordset[0];
-    await db.request().query`UPDATE Users SET password = ${password}, resetToken = NULL, resetTokenExpiry = NULL WHERE id = ${user.id}`;
+    await pool.request().query`UPDATE Users SET password = ${password}, resetToken = NULL, resetTokenExpiry = NULL WHERE id = ${user.id}`;
     res.json({ message: 'Password has been updated successfully.' });
   } catch (err) {
     console.error('Reset Password Error:', err);
@@ -154,16 +134,16 @@ app.post('/api/reset-password', async (req, res) => {
 app.post('/api/learn', async (req, res) => {
   try {
     const { topic, fileName } = req.body;
-    const db = await connectToDatabase();
-    await db.request().query`INSERT INTO LearnRequests (topic, fileName) VALUES (${topic}, ${fileName})`;
+    const pool = await sql.connect(dbConnectionString);
+    await pool.request().query`INSERT INTO LearnRequests (topic, fileName) VALUES (${topic}, ${fileName})`;
     res.status(201).json({ message: 'Learn request added successfully!' });
   } catch (err) { res.status(500).json({ message: 'Error adding learn request.' }) }
 });
 
 app.get('/api/learn', async (req, res) => {
   try {
-    const db = await connectToDatabase();
-    const result = await db.request().query`SELECT * FROM LearnRequests`;
+    const pool = await sql.connect(dbConnectionString);
+    const result = await pool.request().query`SELECT * FROM LearnRequests`;
     res.json(result.recordset);
   } catch (err) { res.status(500).json({ message: 'Error fetching learn requests.' }) }
 });
@@ -172,16 +152,16 @@ app.get('/api/learn', async (req, res) => {
 app.post('/api/tutor', async (req, res) => {
   try {
     const { name, number, schedule } = req.body;
-    const db = await connectToDatabase();
-    await db.request().query`INSERT INTO TutorOffers (name, number, schedule) VALUES (${name}, ${number}, ${schedule})`;
+    const pool = await sql.connect(dbConnectionString);
+    await pool.request().query`INSERT INTO TutorOffers (name, number, schedule) VALUES (${name}, ${number}, ${schedule})`;
     res.status(201).json({ message: 'Tutor offer added successfully!' });
   } catch (err) { res.status(500).json({ message: 'Error adding tutor offer.' }) }
 });
 
 app.get('/api/tutor', async (req, res) => {
   try {
-    const db = await connectToDatabase();
-    const result = await db.request().query`SELECT * FROM TutorOffers`;
+    const pool = await sql.connect(dbConnectionString);
+    const result = await pool.request().query`SELECT * FROM TutorOffers`;
     res.json(result.recordset);
   } catch (err) { res.status(500).json({ message: 'Error fetching tutor offers.' }) }
 });
