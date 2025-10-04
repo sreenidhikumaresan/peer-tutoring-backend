@@ -91,24 +91,44 @@ app.post('/api/login', async (req, res) => {
 // --- FORGOT PASSWORD ROUTE (UPDATED) ---
 app.post('/api/forgot-password', async (req, res) => {
   try {
-    const { email } = req.body; // Use email
-    const db = await connectToDatabase();
-    const userResult = await db.request().query`SELECT * FROM Users WHERE email = ${email}`; // Query by email
+    const { email } = req.body;
+    const pool = await sql.connect(dbConnectionString);
+    const userResult = await pool.request().query`SELECT * FROM Users WHERE email = ${email}`;
 
     if (userResult.recordset.length > 0) {
+      const user = userResult.recordset[0];
       const token = crypto.randomBytes(20).toString('hex');
       const expiry = new Date(Date.now() + 3600000); // 1 hour
-      await db.request().query`UPDATE Users SET resetToken = ${token}, resetTokenExpiry = ${expiry} WHERE email = ${email}`;
+
+      await pool.request().query`UPDATE Users SET resetToken = ${token}, resetTokenExpiry = ${expiry} WHERE email = ${email}`;
       
-      const resetLink = `YOUR_FRONTEND_URL/reset-password.html?token=${token}`;
-      console.log('--- PASSWORD RESET LINK (FOR TESTING) ---');
-      console.log(resetLink);
-      console.log('-----------------------------------------');
+      const frontendUrl = "https://pse10-frontend-site-ffgrdtdvfveec0du.centralindia-01.azurewebsites.net";
+      const resetLink = `${frontendUrl}/reset-password.html?token=${token}`;
+
+      // --- EMAIL SENDING LOGIC ---
+      const connectionString = process.env.COMMUNICATION_SERVICES_CONNECTION_STRING;
+      const senderAddress = process.env.SENDER_EMAIL_ADDRESS;
+      const emailClient = new EmailClient(connectionString);
+
+      const message = {
+        senderAddress: senderAddress,
+        content: {
+          subject: "Password Reset for Peer Tutoring",
+          plainText: `You requested a password reset. Please click the following link to reset your password:\n\n${resetLink}\n\nIf you did not request this, please ignore this email.`,
+        },
+        recipients: { to: [{ address: user.email }] },
+      };
+
+      const poller = await emailClient.beginSend(message);
+      await poller.pollUntilDone();
+      console.log(`Password reset email sent to ${user.email}`);
+      // --- END EMAIL LOGIC ---
     }
-    res.json({ message: 'If a user with that email exists, a password reset link has been generated.' });
+    
+    res.json({ message: 'If an account with that email exists, a password reset link has been sent.' });
   } catch (err) {
     console.error('Forgot Password Error:', err);
-    res.status(500).json({ message: 'An error occurred.' });
+    res.status(500).json({ message: 'An error occurred while sending the reset email.' });
   }
 });
 
