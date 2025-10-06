@@ -4,6 +4,10 @@ const sql = require('mssql');
 const crypto = require('crypto');
 const { EmailClient } = require("@azure/communication-email");
 const { WebPubSubServiceClient } = require('@azure/web-pubsub');
+require('dotenv').config(); // ✅ Make sure dotenv loads first
+
+// ✅ DEBUG LOG – check if .env is actually loading
+console.log("Loaded PUBSUB Connection String:", process.env.WEB_PUBSUB_CONNECTION_STRING);
 
 const app = express();
 const port = process.env.PORT || 8080;
@@ -13,12 +17,30 @@ const dbConnectionString = 'Server=tcp:pse10-sql-server-new.database.windows.net
 const pubSubConnectionString = process.env.WEB_PUBSUB_CONNECTION_STRING;
 const hubName = 'tutorHub';
 
+// ✅ SAFETY CHECK – stop server if no PubSub connection string
+if (!pubSubConnectionString) {
+  console.error("❌ ERROR: Missing WEB_PUBSUB_CONNECTION_STRING in .env file!");
+  process.exit(1);
+}
+
 // Initialize clients
 const pubSubClient = new WebPubSubServiceClient(pubSubConnectionString, hubName);
 
+// ✅ Middleware for JSON
+app.use(express.json());
+
 // Middleware
 app.use(cors());
-app.use(express.json());
+app.use(cors({
+  origin: ['https://pse10-frontend-site-ffgrdtdvfveec0du.centralindia-01.azurewebsites.net', 'http://localhost:5500'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true
+}));
+
+// --- REST OF YOUR CODE BELOW UNCHANGED ---
+
+
 
 // --- DATABASE INITIALIZATION ---
 async function initializeDatabase() {
