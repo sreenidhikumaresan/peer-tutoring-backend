@@ -42,6 +42,7 @@ app.use(cors({
 
 
 
+
 // --- DATABASE INITIALIZATION ---
 async function initializeDatabase() {
   try {
