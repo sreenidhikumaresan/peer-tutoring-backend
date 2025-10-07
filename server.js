@@ -154,7 +154,6 @@ app.get('/api/tutor', async (req, res) => {
   } catch (err) { res.status(500).json({ message: 'Error fetching tutor offers.' }) }
 });
 
-
 // --- PROPOSAL ROUTES ---
 app.post('/api/proposals', async (req, res) => {
   try {
@@ -180,13 +179,11 @@ app.post('/api/proposals/:id/respond', async (req, res) => {
   }
 });
 
-
-// --- NOTIFICATION POLLING ROUTES ---
+// --- NEW NOTIFICATION POLLING ROUTE ---
 app.get('/api/notifications/:username', async (req, res) => {
   try {
     const username = req.params.username;
     const pool = await sql.connect(dbConnectionString);
-    // Find a pending proposal for this user
     const result = await pool.request().query`SELECT TOP 1 * FROM Proposals WHERE recipientUsername = ${username} AND status = 'pending'`;
 
     if (result.recordset.length > 0) {
@@ -203,46 +200,13 @@ app.get('/api/notifications/:username', async (req, res) => {
         }
       });
     } else {
-      res.json({}); // Send empty object if no notifications
+      res.json({});
     }
   } catch (err) {
     console.error('Error fetching notifications:', err);
     res.status(500).json({ message: 'Error fetching notifications.' });
   }
 });
-
-app.get('/api/proposal-status/:username', async (req, res) => {
-  try {
-    const username = req.params.username;
-    const pool = await sql.connect(dbConnectionString);
-    
-    // Find a proposal made by this user that has been recently updated
-    const result = await pool.request()
-      .query`SELECT TOP 1 * FROM Proposals 
-              WHERE proposerUsername = ${username} AND (status = 'accepted' OR status = 'rejected')`;
-
-    if (result.recordset.length > 0) {
-      const proposal = result.recordset[0];
-      // Mark as notified so the tutor doesn't get the same popup again
-      await pool.request().query`UPDATE Proposals SET status = 'notified' WHERE id = ${proposal.id}`;
-
-      res.json({
-        type: 'proposalResponse',
-        data: {
-          topic: proposal.topic,
-          status: proposal.status,
-          recipient: proposal.recipientUsername
-        }
-      });
-    } else {
-      res.json({});
-    }
-  } catch (err) {
-    console.error('Error fetching proposal status:', err);
-    res.status(500).json({ message: 'Error fetching status.' });
-  }
-});
-
 
 // --- START SERVER ---
 app.listen(port, async () => {
