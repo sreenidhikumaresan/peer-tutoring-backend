@@ -3,16 +3,45 @@ const cors = require('cors');
 const sql = require('mssql');
 const crypto = require('crypto');
 const { EmailClient } = require("@azure/communication-email");
+const { WebPubSubServiceClient } = require('@azure/web-pubsub');
+require('dotenv').config(); // ✅ Make sure dotenv loads first
+
+// ✅ DEBUG LOG – check if .env is actually loading
+console.log("Loaded PUBSUB Connection String:", process.env.WEB_PUBSUB_CONNECTION_STRING);
 
 const app = express();
 const port = process.env.PORT || 8080;
 
-// --- CONNECTION STRING ---
+// --- CONNECTION STRINGS ---
 const dbConnectionString = 'Server=tcp:pse10-sql-server-new.database.windows.net,1433;Initial Catalog=pse10-db;Persist Security Info=False;User ID=sqladmin;Password=Project@1;MultipleActiveResultSets=False;Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;';
+const pubSubConnectionString = process.env.WEB_PUBSUB_CONNECTION_STRING;
+const hubName = 'tutorHub';
+
+// ✅ SAFETY CHECK – stop server if no PubSub connection string
+if (!pubSubConnectionString) {
+  console.error("❌ ERROR: Missing WEB_PUBSUB_CONNECTION_STRING in .env file!");
+  process.exit(1);
+}
+
+// Initialize clients
+const pubSubClient = new WebPubSubServiceClient(pubSubConnectionString, hubName);
+
+// ✅ Middleware for JSON
+app.use(express.json());
 
 // Middleware
 app.use(cors());
-app.use(express.json());
+app.use(cors({
+  origin: ['https://pse10-frontend-site-ffgrdtdvfveec0du.centralindia-01.azurewebsites.net', 'http://localhost:5500'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true
+}));
+
+// --- REST OF YOUR CODE BELOW UNCHANGED ---
+
+
+
 
 // --- DATABASE INITIALIZATION ---
 async function initializeDatabase() {
@@ -154,12 +183,31 @@ app.get('/api/tutor', async (req, res) => {
   } catch (err) { res.status(500).json({ message: 'Error fetching tutor offers.' }) }
 });
 
-// --- PROPOSAL ROUTES ---
+
+// --- REAL-TIME NOTIFICATION ROUTES ---
+app.get('/negotiate', async (req, res) => {
+  const username = req.query.username;
+  if (!username) return res.status(400).send('Missing username.');
+  try {
+    const token = await pubSubClient.getClientAccessToken({ userId: username });
+    res.json({ url: token.url });
+  } catch (err) {
+    console.error("Error getting client access token:", err);
+    res.status(500).json({ message: "Error getting access token." });
+  }
+});
+
 app.post('/api/proposals', async (req, res) => {
   try {
     const { proposerUsername, recipientUsername, topic, proposedDate, proposedTime } = req.body;
     const pool = await sql.connect(dbConnectionString);
-    await pool.request().query`INSERT INTO Proposals (proposerUsername, recipientUsername, topic, proposedDate, proposedTime, status) VALUES (${proposerUsername}, ${recipientUsername}, ${topic}, ${proposedDate}, ${proposedTime}, 'pending')`;
+    const result = await pool.request().query`INSERT INTO Proposals (proposerUsername, recipientUsername, topic, proposedDate, proposedTime, status) OUTPUT INSERTED.id VALUES (${proposerUsername}, ${recipientUsername}, ${topic}, ${proposedDate}, ${proposedTime}, 'pending')`;
+    const newProposalId = result.recordset[0].id;
+
+    await pubSubClient.sendToUser(recipientUsername, {
+      type: 'newProposal',
+      data: { id: newProposalId, tutorName: proposerUsername, tutorPoints: 10, date: proposedDate, time: proposedTime, topic: topic }
+    });
     res.status(201).json({ message: 'Proposal sent!' });
   } catch (err) {
     console.error('Error creating proposal:', err);
@@ -172,42 +220,54 @@ app.post('/api/proposals/:id/respond', async (req, res) => {
     const { response } = req.body; // 'accepted' or 'rejected'
     const pool = await sql.connect(dbConnectionString);
     await pool.request().query`UPDATE Proposals SET status = ${response} WHERE id = ${req.params.id}`;
+    const proposalResult = await pool.request().query`SELECT * FROM Proposals WHERE id = ${req.params.id}`;
+    const proposal = proposalResult.recordset[0];
+    
+    await pubSubClient.sendToUser(proposal.proposerUsername, {
+      type: 'proposalResponse',
+      data: { topic: proposal.topic, status: response, recipient: proposal.recipientUsername }
+    });
     res.json({ message: `Proposal ${response}.` });
   } catch (err) {
     console.error('Error responding to proposal:', err);
     res.status(500).json({ message: 'Error responding.' });
   }
 });
-
-// --- NEW NOTIFICATION POLLING ROUTE ---
-app.get('/api/notifications/:username', async (req, res) => {
+// Add this new route to your server.js
+app.get('/api/proposal-status/:username', async (req, res) => {
   try {
     const username = req.params.username;
     const pool = await sql.connect(dbConnectionString);
-    const result = await pool.request().query`SELECT TOP 1 * FROM Proposals WHERE recipientUsername = ${username} AND status = 'pending'`;
+    
+    // Find the first proposal made by this user that has been recently updated
+    const result = await pool.request()
+      .query`SELECT TOP 1 * FROM Proposals 
+              WHERE proposerUsername = ${username} AND (status = 'accepted' OR status = 'rejected')`;
 
     if (result.recordset.length > 0) {
       const proposal = result.recordset[0];
+      
+      // IMPORTANT: After notifying the tutor, we should update the status
+      // so they don't get the same notification again.
+      // We can use a new status like 'notified'.
+      await pool.request().query`UPDATE Proposals SET status = 'notified' WHERE id = ${proposal.id}`;
+
       res.json({
-        type: 'newProposal',
+        type: 'proposalResponse',
         data: {
-          id: proposal.id,
-          tutorName: proposal.proposerUsername,
-          tutorPoints: 10,
-          date: proposal.proposedDate,
-          time: proposal.proposedTime,
-          topic: proposal.topic
+          topic: proposal.topic,
+          status: proposal.status,
+          recipient: proposal.recipientUsername
         }
       });
     } else {
-      res.json({});
+      res.json({}); // Send empty object if no updates
     }
   } catch (err) {
-    console.error('Error fetching notifications:', err);
-    res.status(500).json({ message: 'Error fetching notifications.' });
+    console.error('Error fetching proposal status:', err);
+    res.status(500).json({ message: 'Error fetching status.' });
   }
 });
-
 // --- START SERVER ---
 app.listen(port, async () => {
   console.log(`Server is starting and listening on port ${port}`);
